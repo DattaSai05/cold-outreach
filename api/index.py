@@ -118,17 +118,48 @@ def email_blocks(email: str, company: str, context: str) -> list:
 # ---------------------------------------------------------------------------
 
 @bolt_app.command("/coldreach")
-def handle_coldreach(ack, body, client):
-    """Open the input modal — ack + views.open run before any heavy imports."""
+def handle_coldreach(ack, body):
+    """
+    Respond instantly with an ephemeral message + button.
+    The button click generates a fresh trigger_id so views.open never hits
+    an expired_trigger_id — even on cold starts.
+    """
+    ack(
+        response_type="ephemeral",
+        blocks=[
+            {
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": "Ready to draft a cold outreach email."},
+            },
+            {
+                "type": "actions",
+                "elements": [
+                    {
+                        "type": "button",
+                        "text": {"type": "plain_text", "text": "Open Form"},
+                        "action_id": "open_draft_modal",
+                        "value": body["channel_id"],
+                        "style": "primary",
+                    }
+                ],
+            },
+        ],
+        text="Ready to draft a cold outreach email.",
+    )
+
+
+@bolt_app.action("open_draft_modal")
+def handle_open_modal(ack, body, client):
+    """Open the input modal from a button click — trigger_id is always fresh here."""
     ack()
-    print(f"[coldreach] trigger_id={body.get('trigger_id')} channel={body.get('channel_id')}")
+    channel_id = body["actions"][0]["value"]
     try:
         client.views_open(
             trigger_id=body["trigger_id"],
             view={
                 "type": "modal",
                 "callback_id": "draft_email_modal",
-                "private_metadata": body["channel_id"],
+                "private_metadata": channel_id,
                 "title": {"type": "plain_text", "text": "Cold Outreach"},
                 "submit": {"type": "plain_text", "text": "Draft Email"},
                 "close": {"type": "plain_text", "text": "Cancel"},
@@ -160,10 +191,9 @@ def handle_coldreach(ack, body, client):
                 ],
             },
         )
-        print("[coldreach] views.open succeeded")
     except Exception as e:
-        print(f"[coldreach] views.open failed: {e}")
-        client.chat_postMessage(channel=body["channel_id"], text=f"Error opening modal: {e}")
+        print(f"[open_draft_modal] views.open failed: {e}")
+        client.chat_postMessage(channel=channel_id, text=f"Error opening form: {e}")
 
 
 @bolt_app.view("draft_email_modal")
