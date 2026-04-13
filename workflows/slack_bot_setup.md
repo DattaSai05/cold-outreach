@@ -1,7 +1,7 @@
 # Workflow: Slack Bot Setup & Deployment
 
 ## Objective
-Run the cold outreach Slack bot 24/7 on Railway so `/outreach` works from Slack at any time, without opening a terminal.
+Deploy the cold outreach Slack bot to Vercel so `/outreach` works 24/7 in Slack — no terminal, no persistent process. Vercel wakes the bot only when you use it.
 
 ---
 
@@ -11,108 +11,88 @@ Run the cold outreach Slack bot 24/7 on Railway so `/outreach` works from Slack 
 1. Go to [api.slack.com/apps](https://api.slack.com/apps) → **Create New App** → **From scratch**
 2. Name it (e.g. "Cold Outreach") and pick your workspace → **Create App**
 
-### Step 2 — Enable Socket Mode
-1. Left sidebar → **Socket Mode** → toggle **Enable Socket Mode** on
-2. Create an App-Level Token: name it anything, add scope `connections:write` → **Generate**
-3. Copy the token (starts with `xapp-`) → save as `SLACK_APP_TOKEN`
+### Step 2 — Disable Socket Mode
+1. Left sidebar → **Socket Mode**
+2. Make sure it is toggled **OFF** (we use HTTP now, not a persistent connection)
 
-### Step 3 — Add Bot Scopes
+### Step 3 — Get your Signing Secret
+1. Left sidebar → **Basic Information** → scroll to **App Credentials**
+2. Copy **Signing Secret** → paste into `.env` as `SLACK_SIGNING_SECRET`
+
+### Step 4 — Add Bot Scopes
 1. Left sidebar → **OAuth & Permissions** → scroll to **Bot Token Scopes**
 2. Add: `chat:write`, `commands`
 3. Scroll up → **Install to Workspace** → **Allow**
-4. Copy the **Bot User OAuth Token** (starts with `xoxb-`) → save as `SLACK_BOT_TOKEN`
+4. Copy the **Bot User OAuth Token** (`xoxb-...`) → already in `.env` as `SLACK_BOT_TOKEN`
 
-### Step 4 — Create the Slash Command
+### Step 5 — Create the Slash Command
 1. Left sidebar → **Slash Commands** → **Create New Command**
-2. Command: `/outreach`, Request URL: `https://placeholder.com`, any description
+2. Fill in:
+   - Command: `/outreach`
+   - Request URL: `https://<your-app>.vercel.app/slack/events` *(fill in after Vercel deployment)*
+   - Short description: `Draft a cold outreach email`
 3. **Save**
 
-### Step 5 — Enable Interactivity
-1. Left sidebar → **Interactivity & Shortcuts** → toggle on
-2. Request URL: `https://placeholder.com`
+### Step 6 — Enable Interactivity
+1. Left sidebar → **Interactivity & Shortcuts** → toggle **ON**
+2. Request URL: `https://<your-app>.vercel.app/slack/events` *(same URL as above)*
 3. **Save Changes**
 
-### Step 6 — Reinstall the App
+### Step 7 — Reinstall the App
 Left sidebar → **Install App** → **Reinstall to Workspace** → **Allow**
 
 ---
 
-## Part 2 — Deploy to Railway (24/7 hosting)
+## Part 2 — Deploy to Vercel
 
-### Step 1 — Create a GitHub repo
-Railway deploys from Git. Push the project to a new GitHub repo:
-```bash
-git init
-git add .
-git commit -m "Initial commit"
-# Create a new repo on github.com, then:
-git remote add origin https://github.com/YOUR_USERNAME/cold-outreach.git
-git push -u origin main
-```
+### Step 1 — Sign up for Vercel
+1. Go to [vercel.com](https://vercel.com) → **Sign Up** with GitHub
 
-Note: make sure `.env`, `credentials.json`, and `token.json` are in `.gitignore` — secrets go in Railway env vars, not the repo.
+### Step 2 — Import the GitHub repo
+1. In Vercel dashboard → **Add New Project** → **Import Git Repository**
+2. Select your `cold-outreach` repo → **Import**
+3. Leave all settings as default — Vercel detects `vercel.json` automatically
+4. Click **Deploy**
 
-### Step 2 — Create a .gitignore
-Create a `.gitignore` in the project root with at minimum:
-```
-.env
-credentials.json
-token.json
-__pycache__/
-.tmp/
-```
-
-### Step 3 — Sign up and create a Railway project
-1. Go to [railway.app](https://railway.app) → sign up with GitHub
-2. **New Project** → **Deploy from GitHub repo** → select your repo
-3. Railway will detect `requirements.txt` and `Procfile` automatically
-
-### Step 4 — Add environment variables
-In Railway, go to your service → **Variables** tab → add each of these:
+### Step 3 — Add environment variables
+In Vercel → your project → **Settings** → **Environment Variables** → add each:
 
 | Variable | Value |
 |---|---|
 | `SLACK_BOT_TOKEN` | Your `xoxb-...` token |
-| `SLACK_APP_TOKEN` | Your `xapp-...` token |
+| `SLACK_SIGNING_SECRET` | From Basic Information → App Credentials |
 | `GROQ_API_KEY` | Your `gsk_...` key |
 | `SENDER_NAME` | Your name |
 | `SENDER_ROLE` | Your role |
 | `SENDER_COMPANY` | Your company |
 | `SENDER_PRODUCT` | What you offer |
-| `GMAIL_TOKEN_JSON` | Contents of your local `token.json` (see below) |
+| `GMAIL_TOKEN_JSON` | Full contents of your local `token.json` |
 
-### Step 5 — Get the GMAIL_TOKEN_JSON value
-`token.json` was created on your PC when you first authenticated Gmail. Get its contents:
-1. Open `token.json` from the project root in a text editor
-2. Copy the entire contents (it's a JSON object)
-3. Paste it as the value for `GMAIL_TOKEN_JSON` in Railway
+After adding variables → **Redeploy** (Deployments tab → the latest deploy → three-dot menu → Redeploy).
 
-### Step 6 — Set the service type to Worker
-Railway may try to run this as a web service and fail because there's no HTTP port.
-1. In your service settings → **Settings** tab
-2. Under **Deploy** → make sure it's using the `Procfile` (which defines a `worker`)
-3. If Railway shows a "No start command" warning, manually set the start command to:
-   ```
-   python slack_bot.py
-   ```
-
-### Step 7 — Deploy
-Railway deploys automatically on every push to `main`. Check the **Logs** tab to confirm:
-```
-Cold Outreach bot is running.
-```
+### Step 4 — Copy the Vercel URL back to Slack
+1. In Vercel, copy your deployment URL (e.g. `https://cold-outreach-abc123.vercel.app`)
+2. Go back to your Slack app settings:
+   - **Slash Commands** → edit `/outreach` → update Request URL to `https://cold-outreach-abc123.vercel.app/slack/events`
+   - **Interactivity & Shortcuts** → update Request URL to the same URL
+3. Save both
 
 ---
 
-## Usage (once deployed)
+## Usage
 
 In any Slack channel:
 1. Type `/outreach` → a modal opens
-2. Fill in **Target Company** and **Context** → click **Draft Email**
+2. Fill in **Target Company** and **Context** → **Draft Email**
 3. The bot posts the draft with three buttons:
    - **Regenerate** — fresh draft
-   - **Edit Context** — refine context and regenerate
-   - **Save to Gmail Drafts** — saves to Gmail and posts the link
+   - **Edit Context** — refine context and regenerate in place
+   - **Save to Gmail Drafts** — saves directly to Gmail and posts the link
+
+---
+
+## Future deploys
+Every `git push` to your repo automatically redeploys to Vercel. No manual steps needed.
 
 ---
 
@@ -120,8 +100,8 @@ In any Slack channel:
 
 | Situation | How to handle |
 |---|---|
-| Bot doesn't respond to `/outreach` | Check Railway logs for errors; verify all env vars are set |
-| "Session expired" in Slack | State is in-memory — redeploying clears sessions. Run `/outreach` again |
-| Gmail save fails on Railway | Check that `GMAIL_TOKEN_JSON` is set and contains valid JSON |
-| `GMAIL_TOKEN_JSON` expired | Re-run the Gmail auth locally (`py outreach.py` → hit `s`), copy the new `token.json` contents to Railway |
-| Bot crashes on Railway | Check Logs tab; Railway auto-restarts crashed workers |
+| `/outreach` gives "dispatch_failed" | Request URL not set in Slack app, or Vercel deploy failed — check Vercel logs |
+| Buttons do nothing | Interactivity URL not set in Slack app settings |
+| Gmail save fails | Check that `GMAIL_TOKEN_JSON` env var is set in Vercel and contains valid JSON |
+| `GMAIL_TOKEN_JSON` expired | Re-run Gmail auth locally (`py outreach.py` → `s`), copy new `token.json` contents to Vercel env vars, redeploy |
+| Need to update sender details | Change env vars in Vercel Settings → redeploy |
