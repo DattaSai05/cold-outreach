@@ -4,12 +4,15 @@ Agent: Cold Outreach Slack Bot (Serverless / Vercel)
 Handles Slack slash commands and interactions over HTTP.
 Vercel wakes this up on demand — no persistent process needed.
 
-See workflows/slack_bot_setup.md for Slack app and Vercel setup.
+See workflows/slack_bot_setup.md for setup instructions.
+
+Usage in Slack:
+  /coldreach  →  opens a modal to enter company + context
 
 Slack app requirements:
   - Socket Mode: OFF
-  - Slash command /outreach → Request URL: https://<your-app>.vercel.app/slack/events
-  - Interactivity → Request URL:           https://<your-app>.vercel.app/slack/events
+  - Slash command /coldreach → Request URL: https://<your-app>.vercel.app/slack/events
+  - Interactivity → Request URL:            https://<your-app>.vercel.app/slack/events
 """
 
 import json
@@ -17,16 +20,14 @@ import os
 import sys
 from pathlib import Path
 
-# Make tools/ importable from the project root
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+# Only lightweight imports at module level — keeps cold start fast so
+# ack() + views.open() complete within Slack's 3-second trigger_id window.
 from dotenv import load_dotenv
 from flask import Flask, request
 from slack_bolt import App
 from slack_bolt.adapter.flask import SlackRequestHandler
-
-from tools.draft_email import draft_email
-from tools.save_to_gmail_drafts import save_draft
 
 load_dotenv()
 
@@ -53,7 +54,6 @@ def get_sender() -> dict:
 
 
 def format_email_for_slack(email: str) -> str:
-    """Bold the subject line for Slack mrkdwn."""
     return "\n".join(
         f"*{line}*" if line.lower().startswith("subject:") else line
         for line in email.splitlines()
@@ -61,7 +61,6 @@ def format_email_for_slack(email: str) -> str:
 
 
 def parse_email(email: str) -> tuple[str, str]:
-    """Split 'Subject: ...\n\n<body>' into (subject, body)."""
     lines = email.splitlines()
     subject, body_lines, in_body = "", [], False
     for line in lines:
@@ -75,10 +74,6 @@ def parse_email(email: str) -> tuple[str, str]:
 
 
 def email_blocks(email: str, company: str, context: str) -> list:
-    """
-    Build Block Kit blocks for a drafted email.
-    State (company + context) is encoded in button values — no server-side storage needed.
-    """
     state = json.dumps({"company": company, "context": context})
     return [
         {
@@ -119,8 +114,8 @@ def email_blocks(email: str, company: str, context: str) -> list:
 # ---------------------------------------------------------------------------
 
 @bolt_app.command("/coldreach")
-def handle_outreach(ack, body, client):
-    """Open the input modal when /coldreach is used."""
+def handle_coldreach(ack, body, client):
+    """Open the input modal — ack + views.open run before any heavy imports."""
     ack()
     client.views_open(
         trigger_id=body["trigger_id"],
@@ -163,42 +158,52 @@ def handle_outreach(ack, body, client):
 
 @bolt_app.view("draft_email_modal")
 def handle_modal_submit(ack, body, client):
-    """Draft the email and post it to the channel on modal submit."""
+    """Draft the email on modal submit. Heavy imports happen here, not at startup."""
     ack()
+    # Deferred import — only loaded when actually needed
+    from tools.draft_email import draft_email
+
     values = body["view"]["state"]["values"]
     company = values["company_block"]["company_input"]["value"]
     context = values["context_block"]["context_input"]["value"]
     channel = body["view"]["private_metadata"]
 
     result = client.chat_postMessage(channel=channel, text="Drafting email...")
-    email = draft_email(company, context, get_sender())
-    client.chat_update(
-        channel=channel,
-        ts=result["ts"],
-        text=email,
-        blocks=email_blocks(email, company, context),
-    )
+    try:
+        email = draft_email(company, context, get_sender())
+        client.chat_update(
+            channel=channel,
+            ts=result["ts"],
+            text=email,
+            blocks=email_blocks(email, company, context),
+        )
+    except Exception as e:
+        client.chat_update(channel=channel, ts=result["ts"], text=f"Error drafting email: {e}", blocks=[])
 
 
 @bolt_app.action("regenerate")
 def handle_regenerate(ack, body, client):
-    """Regenerate the draft in place."""
     ack()
+    from tools.draft_email import draft_email
+
     state = json.loads(body["actions"][0]["value"])
     company, context = state["company"], state["context"]
     channel, ts = body["channel"]["id"], body["message"]["ts"]
 
     client.chat_update(channel=channel, ts=ts, text="Regenerating...", blocks=[])
-    email = draft_email(company, context, get_sender())
-    client.chat_update(
-        channel=channel, ts=ts, text=email,
-        blocks=email_blocks(email, company, context),
-    )
+    try:
+        email = draft_email(company, context, get_sender())
+        client.chat_update(
+            channel=channel, ts=ts, text=email,
+            blocks=email_blocks(email, company, context),
+        )
+    except Exception as e:
+        client.chat_update(channel=channel, ts=ts, text=f"Error regenerating: {e}", blocks=[])
 
 
 @bolt_app.action("edit_context")
 def handle_edit_context(ack, body, client):
-    """Open a modal pre-filled with current context."""
+    """Open edit modal — ack + views.open before any heavy imports."""
     ack()
     state = json.loads(body["actions"][0]["value"])
     client.views_open(
@@ -233,24 +238,29 @@ def handle_edit_context(ack, body, client):
 
 @bolt_app.view("edit_context_modal")
 def handle_edit_context_submit(ack, body, client):
-    """Update context and regenerate the draft."""
     ack()
+    from tools.draft_email import draft_email
+
     meta = json.loads(body["view"]["private_metadata"])
     new_context = body["view"]["state"]["values"]["context_block"]["context_input"]["value"]
     channel, ts = meta["channel"], meta["message_ts"]
 
     client.chat_update(channel=channel, ts=ts, text="Regenerating...", blocks=[])
-    email = draft_email(meta["company"], new_context, get_sender())
-    client.chat_update(
-        channel=channel, ts=ts, text=email,
-        blocks=email_blocks(email, meta["company"], new_context),
-    )
+    try:
+        email = draft_email(meta["company"], new_context, get_sender())
+        client.chat_update(
+            channel=channel, ts=ts, text=email,
+            blocks=email_blocks(email, meta["company"], new_context),
+        )
+    except Exception as e:
+        client.chat_update(channel=channel, ts=ts, text=f"Error regenerating: {e}", blocks=[])
 
 
 @bolt_app.action("save_to_gmail")
 def handle_save_to_gmail(ack, body, client):
-    """Parse the email from the posted message and save it to Gmail Drafts."""
     ack()
+    from tools.save_to_gmail_drafts import save_draft
+
     channel = body["channel"]["id"]
     email_text = body["message"]["text"]
     subject, email_body = parse_email(email_text)
@@ -276,5 +286,4 @@ def slack_events():
     return handler.handle(request)
 
 
-# Vercel picks this up as the WSGI app
 app = flask_app
