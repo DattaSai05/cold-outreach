@@ -124,41 +124,41 @@ def handle_coldreach(ack, body, client):
     print(f"[coldreach] trigger_id={body.get('trigger_id')} channel={body.get('channel_id')}")
     try:
         client.views_open(
-        trigger_id=body["trigger_id"],
-        view={
-            "type": "modal",
-            "callback_id": "draft_email_modal",
-            "private_metadata": body["channel_id"],
-            "title": {"type": "plain_text", "text": "Cold Outreach"},
-            "submit": {"type": "plain_text", "text": "Draft Email"},
-            "close": {"type": "plain_text", "text": "Cancel"},
-            "blocks": [
-                {
-                    "type": "input",
-                    "block_id": "company_block",
-                    "label": {"type": "plain_text", "text": "Target Company"},
-                    "element": {
-                        "type": "plain_text_input",
-                        "action_id": "company_input",
-                        "placeholder": {"type": "plain_text", "text": "e.g. Stripe"},
-                    },
-                },
-                {
-                    "type": "input",
-                    "block_id": "context_block",
-                    "label": {"type": "plain_text", "text": "Context"},
-                    "element": {
-                        "type": "plain_text_input",
-                        "action_id": "context_input",
-                        "multiline": True,
-                        "placeholder": {
-                            "type": "plain_text",
-                            "text": "What you know about them, why you're reaching out...",
+            trigger_id=body["trigger_id"],
+            view={
+                "type": "modal",
+                "callback_id": "draft_email_modal",
+                "private_metadata": body["channel_id"],
+                "title": {"type": "plain_text", "text": "Cold Outreach"},
+                "submit": {"type": "plain_text", "text": "Draft Email"},
+                "close": {"type": "plain_text", "text": "Cancel"},
+                "blocks": [
+                    {
+                        "type": "input",
+                        "block_id": "company_block",
+                        "label": {"type": "plain_text", "text": "Target Company"},
+                        "element": {
+                            "type": "plain_text_input",
+                            "action_id": "company_input",
+                            "placeholder": {"type": "plain_text", "text": "e.g. Stripe"},
                         },
                     },
-                },
-            ],
-        },
+                    {
+                        "type": "input",
+                        "block_id": "context_block",
+                        "label": {"type": "plain_text", "text": "Context"},
+                        "element": {
+                            "type": "plain_text_input",
+                            "action_id": "context_input",
+                            "multiline": True,
+                            "placeholder": {
+                                "type": "plain_text",
+                                "text": "What you know about them, why you're reaching out...",
+                            },
+                        },
+                    },
+                ],
+            },
         )
         print("[coldreach] views.open succeeded")
     except Exception as e:
