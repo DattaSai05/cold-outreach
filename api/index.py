@@ -121,7 +121,9 @@ def email_blocks(email: str, company: str, context: str) -> list:
 def handle_coldreach(ack, body, client):
     """Open the input modal — ack + views.open run before any heavy imports."""
     ack()
-    client.views_open(
+    print(f"[coldreach] trigger_id={body.get('trigger_id')} channel={body.get('channel_id')}")
+    try:
+        client.views_open(
         trigger_id=body["trigger_id"],
         view={
             "type": "modal",
@@ -157,7 +159,11 @@ def handle_coldreach(ack, body, client):
                 },
             ],
         },
-    )
+        )
+        print("[coldreach] views.open succeeded")
+    except Exception as e:
+        print(f"[coldreach] views.open failed: {e}")
+        client.chat_postMessage(channel=body["channel_id"], text=f"Error opening modal: {e}")
 
 
 @bolt_app.view("draft_email_modal")
