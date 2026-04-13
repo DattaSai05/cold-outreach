@@ -118,107 +118,44 @@ def email_blocks(email: str, company: str, context: str) -> list:
 # ---------------------------------------------------------------------------
 
 @bolt_app.command("/coldreach")
-def handle_coldreach(ack, body):
+def handle_coldreach(ack, body, say):
     """
-    Respond instantly with an ephemeral message + button.
-    The button click generates a fresh trigger_id so views.open never hits
-    an expired_trigger_id — even on cold starts.
+    Draft an email inline from the slash command text.
+    Usage: /coldreach Company Name | Context about them
+    ack() fires immediately — no trigger_id or modal needed.
     """
-    ack(
-        response_type="ephemeral",
-        blocks=[
-            {
+    ack()
+
+    text = body.get("text", "").strip()
+    if not text or "|" not in text:
+        say(
+            text="Usage: `/coldreach Company Name | Context about them`",
+            blocks=[{
                 "type": "section",
-                "text": {"type": "mrkdwn", "text": "Ready to draft a cold outreach email."},
-            },
-            {
-                "type": "actions",
-                "elements": [
-                    {
-                        "type": "button",
-                        "text": {"type": "plain_text", "text": "Open Form"},
-                        "action_id": "open_draft_modal",
-                        "value": body["channel_id"],
-                        "style": "primary",
-                    }
-                ],
-            },
-        ],
-        text="Ready to draft a cold outreach email.",
-    )
-
-
-@bolt_app.action("open_draft_modal")
-def handle_open_modal(ack, body, client):
-    """Open the input modal from a button click — trigger_id is always fresh here."""
-    ack()
-    channel_id = body["actions"][0]["value"]
-    try:
-        client.views_open(
-            trigger_id=body["trigger_id"],
-            view={
-                "type": "modal",
-                "callback_id": "draft_email_modal",
-                "private_metadata": channel_id,
-                "title": {"type": "plain_text", "text": "Cold Outreach"},
-                "submit": {"type": "plain_text", "text": "Draft Email"},
-                "close": {"type": "plain_text", "text": "Cancel"},
-                "blocks": [
-                    {
-                        "type": "input",
-                        "block_id": "company_block",
-                        "label": {"type": "plain_text", "text": "Target Company"},
-                        "element": {
-                            "type": "plain_text_input",
-                            "action_id": "company_input",
-                            "placeholder": {"type": "plain_text", "text": "e.g. Stripe"},
-                        },
-                    },
-                    {
-                        "type": "input",
-                        "block_id": "context_block",
-                        "label": {"type": "plain_text", "text": "Context"},
-                        "element": {
-                            "type": "plain_text_input",
-                            "action_id": "context_input",
-                            "multiline": True,
-                            "placeholder": {
-                                "type": "plain_text",
-                                "text": "What you know about them, why you're reaching out...",
-                            },
-                        },
-                    },
-                ],
-            },
+                "text": {
+                    "type": "mrkdwn",
+                    "text": (
+                        "*Usage:* `/coldreach Company Name | Context about them`\n"
+                        "*Example:* `/coldreach Stripe | They just launched Stripe Tax globally`"
+                    ),
+                },
+            }],
         )
-    except Exception as e:
-        print(f"[open_draft_modal] views.open failed: {e}")
-        client.chat_postMessage(channel=channel_id, text=f"Error opening form: {e}")
+        return
 
+    company, context = [p.strip() for p in text.split("|", 1)]
+    if not company or not context:
+        say(text="Both company and context are required. Example: `/coldreach Stripe | They just launched Stripe Tax globally`")
+        return
 
-@bolt_app.view("draft_email_modal")
-def handle_modal_submit(ack, body, client):
-    """Draft the email on modal submit. Heavy imports happen here, not at startup."""
-    ack()
-    # Deferred import — only loaded when actually needed
-    from tools.draft_email import draft_email
+    say(text="Drafting email...")
 
-    values = body["view"]["state"]["values"]
-    company = values["company_block"]["company_input"]["value"]
-    context = values["context_block"]["context_input"]["value"]
-    channel = body["view"]["private_metadata"]
-
-    result = client.chat_postMessage(channel=channel, text="Drafting email...")
     try:
+        from tools.draft_email import draft_email
         email = draft_email(company, context, get_sender())
-        client.chat_update(
-            channel=channel,
-            ts=result["ts"],
-            text=email,
-            blocks=email_blocks(email, company, context),
-        )
+        say(blocks=email_blocks(email, company, context), text=email)
     except Exception as e:
-        client.chat_update(channel=channel, ts=result["ts"], text=f"Error drafting email: {e}", blocks=[])
+        say(text=f"Error drafting email: {e}")
 
 
 @bolt_app.action("regenerate")
@@ -243,57 +180,17 @@ def handle_regenerate(ack, body, client):
 
 @bolt_app.action("edit_context")
 def handle_edit_context(ack, body, client):
-    """Open edit modal — ack + views.open before any heavy imports."""
+    """Reply with instructions to re-run the command with updated context."""
     ack()
     state = json.loads(body["actions"][0]["value"])
-    client.views_open(
-        trigger_id=body["trigger_id"],
-        view={
-            "type": "modal",
-            "callback_id": "edit_context_modal",
-            "private_metadata": json.dumps({
-                "company": state["company"],
-                "channel": body["channel"]["id"],
-                "message_ts": body["message"]["ts"],
-            }),
-            "title": {"type": "plain_text", "text": "Edit Context"},
-            "submit": {"type": "plain_text", "text": "Regenerate"},
-            "close": {"type": "plain_text", "text": "Cancel"},
-            "blocks": [
-                {
-                    "type": "input",
-                    "block_id": "context_block",
-                    "label": {"type": "plain_text", "text": "Context"},
-                    "element": {
-                        "type": "plain_text_input",
-                        "action_id": "context_input",
-                        "multiline": True,
-                        "initial_value": state["context"],
-                    },
-                },
-            ],
-        },
+    client.chat_postEphemeral(
+        channel=body["channel"]["id"],
+        user=body["user"]["id"],
+        text=(
+            f"To update context for *{state['company']}*, run:\n"
+            f"`/coldreach {state['company']} | <your updated context>`"
+        ),
     )
-
-
-@bolt_app.view("edit_context_modal")
-def handle_edit_context_submit(ack, body, client):
-    ack()
-    from tools.draft_email import draft_email
-
-    meta = json.loads(body["view"]["private_metadata"])
-    new_context = body["view"]["state"]["values"]["context_block"]["context_input"]["value"]
-    channel, ts = meta["channel"], meta["message_ts"]
-
-    client.chat_update(channel=channel, ts=ts, text="Regenerating...", blocks=[])
-    try:
-        email = draft_email(meta["company"], new_context, get_sender())
-        client.chat_update(
-            channel=channel, ts=ts, text=email,
-            blocks=email_blocks(email, meta["company"], new_context),
-        )
-    except Exception as e:
-        client.chat_update(channel=channel, ts=ts, text=f"Error regenerating: {e}", blocks=[])
 
 
 @bolt_app.action("save_to_gmail")
