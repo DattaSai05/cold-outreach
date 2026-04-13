@@ -118,9 +118,9 @@ def email_blocks(email: str, company: str, context: str) -> list:
 # Slack handlers
 # ---------------------------------------------------------------------------
 
-@bolt_app.command("/outreach")
+@bolt_app.command("/coldreach")
 def handle_outreach(ack, body, client):
-    """Open the input modal when /outreach is used."""
+    """Open the input modal when /coldreach is used."""
     ack()
     client.views_open(
         trigger_id=body["trigger_id"],
