@@ -24,6 +24,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 # Fix SSL certificate lookup on Vercel's Lambda runtime — must happen before
 # any network imports so Python's ssl module picks up the correct CA bundle.
+import ssl
 import certifi
 os.environ["SSL_CERT_FILE"] = certifi.where()
 os.environ["REQUESTS_CA_BUNDLE"] = certifi.where()
@@ -32,11 +33,17 @@ from dotenv import load_dotenv
 from flask import Flask, request
 from slack_bolt import App
 from slack_bolt.adapter.flask import SlackRequestHandler
+from slack_sdk import WebClient
 
 load_dotenv()
 
+# Explicit SSL context passed to WebClient so all Slack API calls use
+# certifi's CA bundle — fixes SSL errors on Vercel's Python runtime.
+_ssl_ctx = ssl.create_default_context(cafile=certifi.where())
+_slack_client = WebClient(token=os.getenv("SLACK_BOT_TOKEN"), ssl=_ssl_ctx)
+
 bolt_app = App(
-    token=os.getenv("SLACK_BOT_TOKEN"),
+    client=_slack_client,
     signing_secret=os.getenv("SLACK_SIGNING_SECRET"),
 )
 
@@ -118,44 +125,47 @@ def email_blocks(email: str, company: str, context: str) -> list:
 # ---------------------------------------------------------------------------
 
 @bolt_app.command("/coldreach")
-def handle_coldreach(ack, body, say):
+def handle_coldreach(ack, body, client):
     """
     Draft an email inline from the slash command text.
     Usage: /coldreach Company Name | Context about them
     ack() fires immediately — no trigger_id or modal needed.
     """
     ack()
+    channel = body["channel_id"]
 
     text = body.get("text", "").strip()
     if not text or "|" not in text:
-        say(
-            text="Usage: `/coldreach Company Name | Context about them`",
-            blocks=[{
-                "type": "section",
-                "text": {
-                    "type": "mrkdwn",
-                    "text": (
-                        "*Usage:* `/coldreach Company Name | Context about them`\n"
-                        "*Example:* `/coldreach Stripe | They just launched Stripe Tax globally`"
-                    ),
-                },
-            }],
+        client.chat_postMessage(
+            channel=channel,
+            text=(
+                "*Usage:* `/coldreach Company Name | Context about them`\n"
+                "*Example:* `/coldreach Stripe | They just launched Stripe Tax globally`"
+            ),
         )
         return
 
     company, context = [p.strip() for p in text.split("|", 1)]
     if not company or not context:
-        say(text="Both company and context are required. Example: `/coldreach Stripe | They just launched Stripe Tax globally`")
+        client.chat_postMessage(
+            channel=channel,
+            text="Both company and context are required. Example: `/coldreach Stripe | They just launched Stripe Tax globally`",
+        )
         return
 
-    say(text="Drafting email...")
+    result = client.chat_postMessage(channel=channel, text="Drafting email...")
 
     try:
         from tools.draft_email import draft_email
         email = draft_email(company, context, get_sender())
-        say(blocks=email_blocks(email, company, context), text=email)
+        client.chat_update(
+            channel=channel,
+            ts=result["ts"],
+            text=email,
+            blocks=email_blocks(email, company, context),
+        )
     except Exception as e:
-        say(text=f"Error drafting email: {e}")
+        client.chat_update(channel=channel, ts=result["ts"], text=f"Error drafting email: {e}", blocks=[])
 
 
 @bolt_app.action("regenerate")
