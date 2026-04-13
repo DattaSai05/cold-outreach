@@ -17,6 +17,7 @@ Slack app requirements:
 
 import json
 import os
+import ssl
 import sys
 from pathlib import Path
 
@@ -24,15 +25,21 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 # Only lightweight imports at module level — keeps cold start fast so
 # ack() + views.open() complete within Slack's 3-second trigger_id window.
+import certifi
 from dotenv import load_dotenv
 from flask import Flask, request
 from slack_bolt import App
 from slack_bolt.adapter.flask import SlackRequestHandler
+from slack_sdk import WebClient
 
 load_dotenv()
 
+# Use certifi's CA bundle to fix SSL issues on Vercel's Python runtime
+ssl_context = ssl.create_default_context(cafile=certifi.where())
+slack_client = WebClient(token=os.getenv("SLACK_BOT_TOKEN"), ssl=ssl_context)
+
 bolt_app = App(
-    token=os.getenv("SLACK_BOT_TOKEN"),
+    client=slack_client,
     signing_secret=os.getenv("SLACK_SIGNING_SECRET"),
 )
 
