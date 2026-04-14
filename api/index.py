@@ -7,11 +7,15 @@ Deployed as a serverless function on Vercel.
 Setup: see workflows/slack_bot_setup.md
 """
 
+# --- Global SSL patch — must run before any other imports touch SSL ---
+import ssl
+import certifi
+_ssl_ctx = ssl.create_default_context(cafile=certifi.where())
+ssl.create_default_context = lambda *args, **kwargs: _ssl_ctx
+
 import json
 import os
-import ssl
 
-import certifi
 from dotenv import load_dotenv
 from flask import Flask, request
 from slack_bolt import App
@@ -19,11 +23,6 @@ from slack_bolt.adapter.flask import SlackRequestHandler
 from slack_sdk import WebClient
 
 load_dotenv()
-
-# --- SSL workaround for Vercel's Python runtime ---
-os.environ["SSL_CERT_FILE"] = certifi.where()
-os.environ["REQUESTS_CA_BUNDLE"] = certifi.where()
-_ssl_ctx = ssl.create_default_context(cafile=certifi.where())
 
 # --- Slack app setup ---
 _web_client = WebClient(
