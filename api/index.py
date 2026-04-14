@@ -34,6 +34,7 @@ bolt_app = App(
     token=os.environ["SLACK_BOT_TOKEN"],
     signing_secret=os.environ["SLACK_SIGNING_SECRET"],
     client=_web_client,
+    process_before_response=True,
 )
 flask_app = Flask(__name__)
 handler = SlackRequestHandler(bolt_app)
@@ -69,53 +70,67 @@ def parse_email(email: str) -> tuple[str, str]:
 
 
 def _btn_value(company: str, context: str) -> str:
-    """Button value payload — stores only company + context (stays under Slack's 2000-char limit)."""
+    """Button value payload — stores company + context (stays under Slack's 2000-char limit)."""
     return json.dumps({"company": company, "context": context})
 
 
-def email_blocks(email: str, company: str, context: str) -> list:
-    """Block Kit layout for a drafted email with action buttons."""
+def result_modal(email: str, company: str, context: str) -> dict:
+    """Modal view showing the drafted email with action buttons."""
     val = _btn_value(company, context)
-    return [
-        {
-            "type": "section",
-            "text": {"type": "mrkdwn", "text": f"```{email}```"},
-        },
-        {"type": "divider"},
-        {
-            "type": "actions",
-            "elements": [
-                {
-                    "type": "button",
-                    "text": {"type": "plain_text", "text": "Regenerate"},
-                    "action_id": "regenerate",
-                    "value": val,
-                },
-                {
-                    "type": "button",
-                    "text": {"type": "plain_text", "text": "Edit Context"},
-                    "action_id": "edit_context",
-                    "value": val,
-                },
-                {
-                    "type": "button",
-                    "text": {"type": "plain_text", "text": "Save to Gmail"},
-                    "action_id": "save_to_gmail",
-                    "style": "primary",
-                    "value": val,
-                },
-            ],
-        },
-    ]
+    meta = json.dumps({"email": email, "company": company, "context": context})
+    return {
+        "type": "modal",
+        "callback_id": "result_modal",
+        "private_metadata": meta,
+        "title": {"type": "plain_text", "text": "Cold Outreach"},
+        "close": {"type": "plain_text", "text": "Close"},
+        "blocks": [
+            {
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": f"```{email}```"},
+            },
+            {"type": "divider"},
+            {
+                "type": "actions",
+                "elements": [
+                    {
+                        "type": "button",
+                        "text": {"type": "plain_text", "text": "Regenerate"},
+                        "action_id": "regenerate",
+                        "value": val,
+                    },
+                    {
+                        "type": "button",
+                        "text": {"type": "plain_text", "text": "Edit Context"},
+                        "action_id": "edit_context",
+                        "value": val,
+                    },
+                    {
+                        "type": "button",
+                        "text": {"type": "plain_text", "text": "Save to Gmail"},
+                        "action_id": "save_to_gmail",
+                        "style": "primary",
+                        "value": val,
+                    },
+                ],
+            },
+        ],
+    }
 
 
-def _channel_id(body: dict) -> str:
-    """Extract channel ID from an action body (handles different payload shapes)."""
-    return (
-        body.get("channel", {}).get("id")
-        or body.get("container", {}).get("channel_id")
-        or ""
-    )
+def error_modal(message: str) -> dict:
+    """Modal view for displaying an error."""
+    return {
+        "type": "modal",
+        "title": {"type": "plain_text", "text": "Error"},
+        "close": {"type": "plain_text", "text": "Close"},
+        "blocks": [
+            {
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": f":warning: {message}"},
+            }
+        ],
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -155,14 +170,12 @@ def handle_coldreach(ack, body):
 @bolt_app.action("open_draft_modal")
 def handle_open_modal(ack, body, client):
     ack()
-    channel_id = body["actions"][0]["value"]
     try:
         client.views_open(
             trigger_id=body["trigger_id"],
             view={
                 "type": "modal",
                 "callback_id": "draft_email_modal",
-                "private_metadata": channel_id,
                 "title": {"type": "plain_text", "text": "Cold Outreach"},
                 "submit": {"type": "plain_text", "text": "Draft Email"},
                 "close": {"type": "plain_text", "text": "Cancel"},
@@ -199,74 +212,57 @@ def handle_open_modal(ack, body, client):
 
 
 # ---------------------------------------------------------------------------
-# Handler 3: Modal submit → draft email → post ephemeral result
+# Handler 3: Modal submit → call Groq → update modal with result
 # ---------------------------------------------------------------------------
 
 @bolt_app.view("draft_email_modal")
-def handle_modal_submit(ack, body, client):
-    ack()
+def handle_modal_submit(ack, body):
     from tools.draft_email import draft_email
 
     values = body["view"]["state"]["values"]
     company = values["company_block"]["company_input"]["value"]
     context = values["context_block"]["context_input"]["value"]
-    channel = body["view"]["private_metadata"]
-    user = body["user"]["id"]
 
     try:
         email = draft_email(company, context, get_sender())
-        client.chat_postEphemeral(
-            channel=channel,
-            user=user,
-            text=email,
-            blocks=email_blocks(email, company, context),
-        )
+        ack(response_action="update", view=result_modal(email, company, context))
     except Exception as e:
-        client.chat_postEphemeral(
-            channel=channel,
-            user=user,
-            text=f"Error drafting email: {e}",
-        )
+        ack(response_action="update", view=error_modal(str(e)))
 
 
 # ---------------------------------------------------------------------------
-# Handler 4: "Regenerate" button → re-draft, update ephemeral in-place
+# Handler 4: "Regenerate" button → re-draft, update modal in-place
 # ---------------------------------------------------------------------------
 
 @bolt_app.action("regenerate")
-def handle_regenerate(ack, body, respond):
+def handle_regenerate(ack, body, client):
     ack()
     from tools.draft_email import draft_email
 
     val = json.loads(body["actions"][0]["value"])
+    view_id = body["view"]["id"]
     try:
         email = draft_email(val["company"], val["context"], get_sender())
-        respond(
-            response_type="ephemeral",
-            replace_original=True,
-            text=email,
-            blocks=email_blocks(email, val["company"], val["context"]),
-        )
+        client.views_update(view_id=view_id, view=result_modal(email, val["company"], val["context"]))
     except Exception as e:
-        respond(response_type="ephemeral", replace_original=False, text=f"Error regenerating: {e}")
+        client.views_update(view_id=view_id, view=error_modal(str(e)))
 
 
 # ---------------------------------------------------------------------------
-# Handler 5: "Edit Context" button → open pre-filled context modal
+# Handler 5: "Edit Context" button → push pre-filled context modal
 # ---------------------------------------------------------------------------
 
 @bolt_app.action("edit_context")
 def handle_edit_context(ack, body, client):
     ack()
     val = json.loads(body["actions"][0]["value"])
-    channel = _channel_id(body)
     try:
-        client.views_open(
+        client.views_push(
             trigger_id=body["trigger_id"],
             view={
                 "type": "modal",
                 "callback_id": "edit_context_modal",
-                "private_metadata": json.dumps({"channel": channel, "company": val["company"]}),
+                "private_metadata": val["company"],
                 "title": {"type": "plain_text", "text": "Edit Context"},
                 "submit": {"type": "plain_text", "text": "Regenerate"},
                 "close": {"type": "plain_text", "text": "Cancel"},
@@ -286,59 +282,57 @@ def handle_edit_context(ack, body, client):
             },
         )
     except Exception as e:
-        print(f"[edit_context] views.open failed: {e}")
+        print(f"[edit_context] views.push failed: {e}")
 
 
 # ---------------------------------------------------------------------------
-# Handler 6: Edit Context modal submit → re-draft with new context
+# Handler 6: Edit Context modal submit → re-draft, update result modal
 # ---------------------------------------------------------------------------
 
 @bolt_app.view("edit_context_modal")
-def handle_edit_context_submit(ack, body, client):
-    ack()
+def handle_edit_context_submit(ack, body):
     from tools.draft_email import draft_email
 
-    meta = json.loads(body["view"]["private_metadata"])
+    company = body["view"]["private_metadata"]
     context = body["view"]["state"]["values"]["context_block"]["context_input"]["value"]
-    user = body["user"]["id"]
 
     try:
-        email = draft_email(meta["company"], context, get_sender())
-        client.chat_postEphemeral(
-            channel=meta["channel"],
-            user=user,
-            text=email,
-            blocks=email_blocks(email, meta["company"], context),
-        )
+        email = draft_email(company, context, get_sender())
+        ack(response_action="update", view=result_modal(email, company, context))
     except Exception as e:
-        client.chat_postEphemeral(
-            channel=meta["channel"],
-            user=user,
-            text=f"Error drafting email: {e}",
-        )
+        ack(response_action="update", view=error_modal(str(e)))
 
 
 # ---------------------------------------------------------------------------
-# Handler 7: "Save to Gmail" button → create Gmail draft
+# Handler 7: "Save to Gmail" button → create Gmail draft, update modal
 # ---------------------------------------------------------------------------
 
 @bolt_app.action("save_to_gmail")
-def handle_save_to_gmail(ack, body, respond):
+def handle_save_to_gmail(ack, body, client):
     ack()
     from tools.save_to_gmail_drafts import save_draft
 
-    # Pull email text from the original message (avoids button value size limits)
-    email = body.get("message", {}).get("text", "")
-    subject, email_body = parse_email(email)
+    meta = json.loads(body["view"]["private_metadata"])
+    subject, email_body = parse_email(meta["email"])
+    view_id = body["view"]["id"]
     try:
         url = save_draft(subject, email_body)
-        respond(
-            response_type="ephemeral",
-            replace_original=False,
-            text=f"Draft saved: {url}",
+        client.views_update(
+            view_id=view_id,
+            view={
+                "type": "modal",
+                "title": {"type": "plain_text", "text": "Saved!"},
+                "close": {"type": "plain_text", "text": "Close"},
+                "blocks": [
+                    {
+                        "type": "section",
+                        "text": {"type": "mrkdwn", "text": f":white_check_mark: Draft saved to Gmail.\n<{url}|Open in Gmail>"},
+                    }
+                ],
+            },
         )
     except Exception as e:
-        respond(response_type="ephemeral", replace_original=False, text=f"Error saving draft: {e}")
+        client.views_update(view_id=view_id, view=error_modal(str(e)))
 
 
 # ---------------------------------------------------------------------------
