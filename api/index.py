@@ -12,6 +12,7 @@ import ssl
 import certifi
 _ssl_ctx = ssl.create_default_context(cafile=certifi.where())
 ssl.create_default_context = lambda *args, **kwargs: _ssl_ctx
+ssl._create_default_https_context = lambda *args, **kwargs: _ssl_ctx
 
 import json
 import os
