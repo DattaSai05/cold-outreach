@@ -34,6 +34,7 @@ bolt_app = App(
     token=os.environ["SLACK_BOT_TOKEN"],
     signing_secret=os.environ["SLACK_SIGNING_SECRET"],
     client=_web_client,
+    process_before_response=True,
 )
 flask_app = Flask(__name__)
 handler = SlackRequestHandler(bolt_app)
