@@ -84,40 +84,44 @@ def parse_email(email: str) -> tuple[str, str]:
     return subject, "\n".join(body_lines).strip()
 
 
-def email_blocks(email: str, company: str, context: str) -> list:
+def email_blocks(email: str, company: str, context: str, approved: bool = False) -> list:
     state = json.dumps({"company": company, "context": context})
-    return [
+    actions = [
+        {
+            "type": "button",
+            "text": {"type": "plain_text", "text": "Regenerate"},
+            "action_id": "regenerate",
+            "value": state,
+        },
+        {
+            "type": "button",
+            "text": {"type": "plain_text", "text": "Edit Context"},
+            "action_id": "edit_context",
+            "value": state,
+        },
+    ]
+    if not approved:
+        actions.append({
+            "type": "button",
+            "text": {"type": "plain_text", "text": "Approve Draft"},
+            "action_id": "save_to_gmail",
+            "value": state,
+            "style": "primary",
+        })
+    blocks = [
         {
             "type": "section",
             "text": {"type": "mrkdwn", "text": format_email_for_slack(email)},
         },
         {"type": "divider"},
-        {
-            "type": "actions",
-            "block_id": "email_actions",
-            "elements": [
-                {
-                    "type": "button",
-                    "text": {"type": "plain_text", "text": "Regenerate"},
-                    "action_id": "regenerate",
-                    "value": state,
-                },
-                {
-                    "type": "button",
-                    "text": {"type": "plain_text", "text": "Edit Context"},
-                    "action_id": "edit_context",
-                    "value": state,
-                },
-                {
-                    "type": "button",
-                    "text": {"type": "plain_text", "text": "Save to Gmail Drafts"},
-                    "action_id": "save_to_gmail",
-                    "value": state,
-                    "style": "primary",
-                },
-            ],
-        },
+        {"type": "actions", "block_id": "email_actions", "elements": actions},
     ]
+    if approved:
+        blocks.append({
+            "type": "context",
+            "elements": [{"type": "mrkdwn", "text": "✓ Draft posted to channel"}],
+        })
+    return blocks
 
 
 # ---------------------------------------------------------------------------
@@ -193,35 +197,34 @@ def handle_edit_context(ack, body, client):
     """Reply with instructions to re-run the command with updated context."""
     ack()
     state = json.loads(body["actions"][0]["value"])
+    channel, ts = body["channel"]["id"], body["message"]["ts"]
+    email = body["message"]["text"]
     client.chat_postEphemeral(
-        channel=body["channel"]["id"],
+        channel=channel,
         user=body["user"]["id"],
         text=(
             f"To update context for *{state['company']}*, run:\n"
             f"`/coldreach {state['company']} | <your updated context>`"
         ),
     )
+    client.chat_update(
+        channel=channel, ts=ts, text=email,
+        blocks=email_blocks(email, state["company"], state["context"], approved=False),
+    )
 
 
 @bolt_app.action("save_to_gmail")
-def handle_save_to_gmail(ack, body, client):
+def handle_approve_draft(ack, body, client):
     ack()
-    from tools.save_to_gmail_drafts import save_draft
-
-    channel = body["channel"]["id"]
+    state = json.loads(body["actions"][0]["value"])
+    channel, ts = body["channel"]["id"], body["message"]["ts"]
     email_text = body["message"]["text"]
-    subject, email_body = parse_email(email_text)
 
-    try:
-        url = save_draft(subject, email_body)
-        client.chat_postMessage(channel=channel, text=f"Draft saved to Gmail: {url}")
-    except FileNotFoundError:
-        client.chat_postMessage(
-            channel=channel,
-            text="Gmail not configured. See `workflows/cold_outreach.md` for setup steps.",
-        )
-    except Exception as e:
-        client.chat_postMessage(channel=channel, text=f"Error saving to Gmail: {e}")
+    client.chat_postMessage(channel=channel, text=email_text)
+    client.chat_update(
+        channel=channel, ts=ts, text=email_text,
+        blocks=email_blocks(email_text, state["company"], state["context"], approved=True),
+    )
 
 
 # ---------------------------------------------------------------------------
