@@ -107,8 +107,8 @@ def result_modal(email: str, company: str, context: str) -> dict:
                     },
                     {
                         "type": "button",
-                        "text": {"type": "plain_text", "text": "Save to Gmail"},
-                        "action_id": "save_to_gmail",
+                        "text": {"type": "plain_text", "text": "Send to Slack"},
+                        "action_id": "send_to_slack",
                         "style": "primary",
                         "value": val,
                     },
@@ -304,29 +304,37 @@ def handle_edit_context_submit(ack, body):
 
 
 # ---------------------------------------------------------------------------
-# Handler 7: "Save to Gmail" button → create Gmail draft, update modal
+# Handler 7: "Send to Slack" button → post draft to channel, update modal
 # ---------------------------------------------------------------------------
 
-@bolt_app.action("save_to_gmail")
-def handle_save_to_gmail(ack, body, client):
+@bolt_app.action("send_to_slack")
+def handle_send_to_slack(ack, body, client):
     ack()
-    from tools.save_to_gmail_drafts import save_draft
-
     meta = json.loads(body["view"]["private_metadata"])
     subject, email_body = parse_email(meta["email"])
+    channel = os.environ.get("SLACK_CHANNEL", "#cold-outreach-testing")
     view_id = body["view"]["id"]
     try:
-        url = save_draft(subject, email_body)
+        client.chat_postMessage(
+            channel=channel,
+            text=f"*Subject: {subject}*\n\n{email_body}",
+            blocks=[
+                {
+                    "type": "section",
+                    "text": {"type": "mrkdwn", "text": f"*Subject: {subject}*\n\n{email_body}"},
+                }
+            ],
+        )
         client.views_update(
             view_id=view_id,
             view={
                 "type": "modal",
-                "title": {"type": "plain_text", "text": "Saved!"},
+                "title": {"type": "plain_text", "text": "Sent!"},
                 "close": {"type": "plain_text", "text": "Close"},
                 "blocks": [
                     {
                         "type": "section",
-                        "text": {"type": "mrkdwn", "text": f":white_check_mark: Draft saved to Gmail.\n<{url}|Open in Gmail>"},
+                        "text": {"type": "mrkdwn", "text": f":white_check_mark: Draft posted to {channel}."},
                     }
                 ],
             },
