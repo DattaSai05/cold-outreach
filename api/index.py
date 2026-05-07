@@ -339,7 +339,7 @@ def handle_save_to_gmail(ack, body, client):
 # Flask route — Vercel entry point
 # ---------------------------------------------------------------------------
 
-@flask_app.route("/slack/events", methods=["POST"])
+@flask_app.route("/api/index", methods=["POST"])
 def slack_events():
     return handler.handle(request)
 
