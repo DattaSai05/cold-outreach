@@ -67,7 +67,7 @@ def get_senders() -> list[dict]:
 
 def _sender_options() -> list[dict]:
     return [
-        {"text": {"type": "plain_text", "text": s["name"]}, "value": str(i)}
+        {"text": {"type": "plain_text", "text": f"{s['name']} ({s['role']})"}, "value": str(i)}
         for i, s in enumerate(get_senders())
     ]
 
