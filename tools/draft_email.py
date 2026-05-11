@@ -2,25 +2,6 @@
 Tool: draft_email
 -----------------
 Calls the Groq API to draft a single B2B cold outreach email.
-
-Inputs (via function call or CLI flags):
-  --company    Target company name
-  --context    Context about the company / reason for outreach
-  --name       Sender full name
-  --role       Sender job title
-  --from       Sender company name
-  --product    One-line description of what sender offers
-
-Output:
-  Prints (or returns) a string in the format:
-    Subject: <subject line>
-
-    <email body>
-
-Exit codes:
-  0  success
-  1  missing required argument
-  2  API error
 """
 
 import argparse
@@ -70,19 +51,19 @@ def build_prompt(company: str, context: str, sender: dict) -> str:
 
 def draft_email(company: str, context: str, sender: dict, api_key: str | None = None) -> str:
     """
-    Draft a cold outreach email and return it as a string.
-
-    Args:
-        company:  Target company name.
-        context:  Context about the company / reason for reaching out.
-        sender:   Dict with keys: name, role, from, product.
-        api_key:  Grok API key (falls back to GROQ_API_KEY env var).
-
+    Generate a single personalized B2B cold outreach email by calling the Groq-hosted OpenAI-compatible chat completions API.
+    
+    Parameters:
+        company (str): Target company name to address in the email.
+        context (str): Brief contextual details about the recipient or use case to personalize the email.
+        sender (dict): Sender information with keys "name", "role", "from", and "product".
+        api_key (str | None): Optional API key to use instead of the GROQ_API_KEY environment variable.
+    
     Returns:
-        The drafted email as a plain string (Subject line + body).
-
+        str: The model-generated email text (exactly formatted subject line, a blank line, then the email body), trimmed of surrounding whitespace.
+    
     Raises:
-        APIError on API failures.
+        ValueError: If no API key is provided and the GROQ_API_KEY environment variable is not set.
     """
     key = api_key or os.getenv("GROQ_API_KEY")
     if not key:
@@ -101,13 +82,18 @@ def draft_email(company: str, context: str, sender: dict, api_key: str | None = 
 
 
 def main() -> None:
+    """
+    Run the command-line tool: parse required arguments, build the sender payload, call draft_email, and print the generated email.
+    
+    Parses required CLI options --company, --context, --name, --role, --from (mapped to `from_company`), and --product; constructs a `sender` dict and prints the email produced by `draft_email`. Exits with status 1 if a ValueError occurs (prints "Error: <msg>" to stderr) and with status 2 if an APIError occurs (prints "API error: <msg>" to stderr).
+    """
     parser = argparse.ArgumentParser(description="Draft a B2B cold outreach email via Groq.")
-    parser.add_argument("--company",  required=True, help="Target company name")
-    parser.add_argument("--context",  required=True, help="Context about the company")
-    parser.add_argument("--name",     required=True, help="Sender full name")
-    parser.add_argument("--role",     required=True, help="Sender job title")
-    parser.add_argument("--from",     required=True, dest="from_company", help="Sender company")
-    parser.add_argument("--product",  required=True, help="What you offer (one line)")
+    parser.add_argument("--company",  required=True)
+    parser.add_argument("--context",  required=True)
+    parser.add_argument("--name",     required=True)
+    parser.add_argument("--role",     required=True)
+    parser.add_argument("--from",     required=True, dest="from_company")
+    parser.add_argument("--product",  required=True)
     args = parser.parse_args()
 
     sender = {
